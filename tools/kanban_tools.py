@@ -441,9 +441,17 @@ def _fields(obj: Any, names: tuple[str, ...]) -> dict[str, Any]:
 def _task_summary_dict(kb, conn, task) -> dict[str, Any]:
     parents = kb.parent_ids(conn, task.id)
     children = kb.child_ids(conn, task.id)
+    # `review_result`/`gate_result` land their verdict on the closing run's metadata, so a
+    # `kanban_list(status="done")` can tell green from red in one call instead of one
+    # kanban_show per card.
+    run = kb.latest_run(conn, task.id)
+    metadata = (run.metadata or {}) if run is not None else {}
     return {
         **_fields(task, _TASK_SUMMARY_FIELDS), "parents": parents, "children": children,
-        "parent_count": len(parents), "child_count": len(children)}
+        "parent_count": len(parents), "child_count": len(children),
+        "review_outcome": metadata.get("review_outcome"),
+        "gate_result": metadata.get("gate_result"),
+        "sprint_result": metadata.get("sprint_result")}
 
 
 # --- Goal-mode judge gate ---

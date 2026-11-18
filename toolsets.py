@@ -160,6 +160,18 @@ TOOLSETS = {
         "files, and (for orchestrators) list, unblock, and fan out tasks.",
         [t for t in _HERMES_CORE_TOOLS if t.startswith("kanban_")],
     ),
+    # Worker verbs: one purpose-built tool per role transition, gated per assignee by
+    # HERMES_KANBAN_WORKER_TOOLS (see tools/kanban_worker_tools.py). Appended by
+    # model_tools._select_tool_names for dispatcher workers INSTEAD of the full
+    # `kanban` surface, so a worker's prompt does not carry 26.8 KB of routing schemas.
+    "kanban_worker": _ts(
+        "Kanban worker verbs — hand_off / review_result / gate_result / open_round / "
+        "decompose_sprint / sprint_report. Only active when the agent is spawned by the "
+        "kanban dispatcher (HERMES_KANBAN_TASK env set) and only for the verbs its role "
+        "owns (kanban.worker_tools in the assignee profile).",
+        sorted({"hand_off", "review_result", "gate_result", "open_round",
+                "decompose_sprint", "sprint_report"}),
+    ),
     "discord": _ts("Discord read and participate tools (fetch messages, search members, create threads)", ["discord"]),
     "discord_admin": _ts("Discord server management (list channels/roles, pin messages, assign roles)", ["discord_admin"]),
     "feishu_doc": _ts("Read Feishu/Lark document content", ["feishu_doc_read"]),

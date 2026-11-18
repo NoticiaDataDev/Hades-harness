@@ -21,6 +21,19 @@ def _names(selection, disabled=None):
     }
 
 
+def _all_names(selection, disabled=None):
+    """Every resolved tool name (the worker verbs do not carry the ``kanban_`` prefix)."""
+    from model_tools import get_tool_definitions
+
+    return {
+        row["function"]["name"]
+        for row in get_tool_definitions(
+            selection, disabled_toolsets=disabled, quiet_mode=True,
+            skip_tool_search_assembly=True,
+        )
+    }
+
+
 @pytest.mark.parametrize("surface", ["cli", "http", "rpc"])
 def test_saved_opt_in_roundtrip_reaches_schema_and_board(surface, tmp_path, monkeypatch):
     """Exercise the real config writer, availability gate, skills gate and handler."""
@@ -127,8 +140,12 @@ def test_selection_is_scoped_and_preserves_worker_and_deny_boundaries(legacy, tm
 
     monkeypatch.setenv("HERMES_KANBAN_TASK", "t_worker")
     worker = _names(["file"])
-    assert "kanban_complete" in worker
+    # A dispatcher worker gets the purpose-built role verb, never the routing surface:
+    # 15 kanban schemas (~26.8 KB) belong to the lead/human session only.
+    assert not worker
     assert "kanban_list" not in worker
+    assert "hand_off" in _all_names(["file"])
     with delegated_child_context():
         assert not _names(["kanban"])
-    assert "kanban_complete" in _names(["file"])
+        assert "hand_off" not in _all_names(["file"])
+    assert "hand_off" in _all_names(["file"])
