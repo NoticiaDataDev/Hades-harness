@@ -433,7 +433,11 @@ def test_every_verb_dispatches_through_the_registry(board, monkeypatch, verb):
 
 
 def test_each_verb_schema_is_small_and_self_describing():
-    """The whole point: six tiny schemas instead of 15 routing schemas (~26.8 KB)."""
+    """The whole point: six tiny schemas instead of 15 routing schemas (~26.8 KB).
+
+    ``tools/AGENTS.md`` asks for contracts rather than tool counts; this budget is the
+    deliberate exception — the surface cost IS the feature here, so it gets a guard.
+    """
     from tools.registry import registry
 
     total = 0

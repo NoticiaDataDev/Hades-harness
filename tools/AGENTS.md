@@ -71,10 +71,17 @@ Rules for tool code:
 
 Single `TOOLSETS` dict. Keys today: `browser, clarify, code_execution, cronjob, debugging,
 delegation, discord, discord_admin, feishu_doc, feishu_drive, file, image_gen,
-kanban, memory, messaging, moa, rl, safe, search, session_search, skills, terminal, todo,
-tts, video, vision, web` (don't assert the list in tests). Per-platform enable/disable via
-`hermes tools` (curses) or `tools.<platform>.enabled/disabled` in config.yaml. `browser_exec` is the
-one core browser tool (beside `browser_cdp` / `browser_dialog` / `browser_vault`, all CDP).
+kanban, kanban_worker, memory, messaging, moa, rl, safe, search, session_search, skills,
+terminal, todo, tts, video, vision, web` (don't assert the list in tests). Per-platform
+enable/disable via `hermes tools` (curses) or `tools.<platform>.enabled/disabled` in
+config.yaml. `kanban_worker` is the *worker* half of kanban: six role verbs
+(`hand_off`, `review_result`, `gate_result`, `open_round`, `decompose_sprint`,
+`sprint_report`) appended by `model_tools._select_tool_names` for a dispatcher-spawned
+worker **instead of** `kanban`, then narrowed per assignee by each verb's `check_fn`
+(`HERMES_KANBAN_WORKER_TOOLS`, exported from `kanban.worker_tools` in the assignee
+profile). Keep `kanban` intact for lead/human sessions — it is the routing surface.
+`browser_exec` is the one core browser tool (beside `browser_cdp` / `browser_dialog` /
+`browser_vault`, all CDP).
 
 ## Browser runtime
 

@@ -31,6 +31,18 @@ Visibility is per role: the ``kanban_worker`` toolset is appended by
 opens only when ``HERMES_KANBAN_WORKER_TOOLS`` (exported by the dispatcher from
 ``kanban.worker_tools`` in the assignee profile) names it. With the env unset the
 profile's role name picks the default lane.
+
+Two caveats worth writing down:
+
+- ``check_fn`` here answers *surface*, which ``tools/AGENTS.md`` says it should not. The
+  exception is deliberate and mirrors the built-in ``kanban`` gate (``_check_kanban_mode``):
+  the dispatcher spawns **one process per card**, so the process is the session. A worker
+  hosted multiplexed inside a gateway process would see another card's lane — the fix
+  there is to carry the lane through the session ContextVar the way the toolset resolver
+  does, not to widen this gate.
+- ``kanban.worker_tools`` in the assignee profile is the intended source of the lane.
+  Nothing exports ``HERMES_KANBAN_WORKER_TOOLS`` yet, so the role-name fallback
+  (``coder`` / ``reviewer`` / ``integrator``) is what lanes use today.
 """
 from __future__ import annotations
 

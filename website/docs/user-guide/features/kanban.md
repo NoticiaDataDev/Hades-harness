@@ -475,18 +475,54 @@ Dispatcher-owned workers receive their task lifecycle tools automatically.
 | `kanban_link` | (Orchestrators) add a `parent_id → child_id` dependency edge after the fact. Returns `gated: true` when the child was `ready` and got demoted back to `todo` because the parent is not done — the child will only run after the parent completes. Refused with `child is already running` when the child is already claimed — an edge added after the claim cannot serialise the run (a worker may still link its *own* running card ahead of a `kind=dependency` block). | `parent_id`, `child_id` |
 | `kanban_unblock` | (Orchestrators) restore a blocked task to its source phase (`review` or `ready`), or `todo` while a parent remains open. | `task_id` |
 
-A typical worker turn looks like:
+A typical worker turn looks like this — note there is no `kanban_show` in the worker lane:
+the card arrives in the worker's first message, so there is nothing to fetch.
 
 ```
 # Model's tool calls, in order:
-kanban_show()                                     # no args — uses HERMES_KANBAN_TASK
-# (model reads the returned worker_context, does the work via terminal/file tools)
-kanban_heartbeat(note="halfway through — 4 of 8 files transformed")
-# (more work)
-kanban_complete(
-    summary="migrated limiter.py to token-bucket; added 14 tests, all pass",
-    metadata={"changed_files": ["limiter.py", "tests/test_limiter.py"], "tests_run": 14},
-)
+hand_off(summary="migrated limiter.py to token-bucket; added 14 tests; pytest -q: 14 passed")
+# → {"ok": true, "status": "done", …}; the next card in the graph unblocks
+```
+
+### The worker surface (`kanban_worker`)
+
+Workers and orchestrators get **different toolsets**. The table above is the routing
+surface (`kanban`): 15 tools, ~26.9 KB of schema, for a lead or chat profile that plans
+work. A dispatcher-spawned worker gets `kanban_worker` instead — one verb for the single
+transition its role may perform, with the handler owning the graph shape, because a weak
+local model gets graph shapes wrong and a broken graph fails **silently**: the cards
+simply never run.
+
+| Verb | Role | Does |
+|---|---|---|
+| `hand_off` | coder | Completes with `metadata.stage = "implemented"`. Pass `blocked_reason` instead when something outside your control stops you — that blocks for a human. |
+| `review_result` | reviewer | `pass` / `fail` completes the card and records `metadata.review_outcome`, so **red is a completed card, never a card sent backwards**. `blocked` parks it. `approved` / `changes_required` are accepted aliases. |
+| `gate_result` | integrator | `pass` merges the unit's feature branch into the integration branch and completes `GATE PASS — …`; `fail` reverts it (when the body names a `rollback_ref`) and blocks. |
+| `open_round` | integrator | Red at the gate: creates the next `code → review → gate` triplet carrying the unit's original instruction verbatim plus the failure evidence, then closes the gate card. Round 3 blocks instead of opening a fourth. |
+| `decompose_sprint` | integrator | On a sprint card: creates the triplet per unit plus the close-out card, then parks the sprint card on the close-out card. |
+| `sprint_report` | integrator | On the close-out card: `pass` closes the sprint (`SPRINT PASS — …`), `gap` blocks it for the lead (`SPRINT GAP — …`). |
+
+Which verbs a worker sees is pinned per assignee rather than guessed by the model: the
+dispatcher exports `HERMES_KANBAN_WORKER_TOOLS` from `kanban.worker_tools` in the
+assignee profile, and each verb's `check_fn` opens only for its lane. A coder lane is
+`file` + `hand_off` (5 tools / ~6 KB); an integrator lane is `file`, `terminal` + four
+verbs (10 tools / ~12 KB). With no profile config the verb falls back to the profile's
+own name (`coder`, `reviewer`, `integrator`).
+
+`open_round` and `decompose_sprint` re-emit the card's instruction instead of authoring
+new criteria, so card bodies carry a machine-readable block that card templates must
+include:
+
+```
+## Original instruction
+…the instruction, verbatim…
+## Verification
+command: <the one command that proves the unit>
+module: <path>
+## Branches
+feature: wt/<task-id>
+integration: integration
+round: 1
 ```
 
 An **orchestrator** worker fans out instead:
@@ -520,9 +556,9 @@ Three reasons:
 2. **No shell-quoting fragility.** Passing `--metadata '{"files": [...]}'` through shlex + argparse is a latent footgun. Structured tool args skip it entirely.
 3. **Better errors.** Tool results are structured JSON the model can reason about, not stderr strings it has to parse.
 
-**Zero schema footprint on normal sessions.** A regular `hermes chat` session has zero `kanban_*` tools in its schema unless the active profile explicitly enables the `kanban` toolset for orchestrator work. Dispatcher-spawned task workers get task-scoped tools because `HERMES_KANBAN_TASK` is set; orchestrator profiles get the broader routing surface through config. No tool bloat for users who never touch kanban.
+**Zero schema footprint on normal sessions.** A regular `hermes chat` session has zero `kanban_*` tools in its schema unless the active profile explicitly enables the `kanban` toolset for orchestrator work. Dispatcher-spawned task workers get task-scoped tools because `HERMES_KANBAN_TASK` is set; orchestrator profiles get the broader routing surface through config. A dispatcher worker gets only its lane's verbs from the `kanban_worker` toolset — ~6 KB of schema for a coder lane instead of ~27 KB — and never the 15 routing tools. No tool bloat for users who never touch kanban.
 
-The auto-injected kanban guidance teaches the model which tool to call when and in what order. It is injected only for the dispatcher-spawned worker that owns the task: an interactive session that merely has the `kanban` toolset enabled keeps the tools but is not told it "has been assigned ONE task", and a `delegate_task` child or a cron run fired from inside a worker — which inherit the worker's `HERMES_KANBAN_TASK` — neither receives the worker protocol nor records a terminal outcome against the worker's card when its own turn budget runs out.
+The auto-injected kanban guidance (the "you have been assigned ONE task" protocol, ~6.6 KB) is keyed on `kanban_show` being in the tool list. A dispatcher worker no longer carries `kanban_show` — the card arrives in its first message and its lane is one self-describing verb — so that guidance is not injected for workers at all. An orchestrator profile that enables `kanban` still gets both the tools and the guidance. A `delegate_task` child or a cron run fired from inside a worker — which inherit the worker's `HERMES_KANBAN_TASK` — neither receives the worker protocol nor records a terminal outcome against the worker's card when its own turn budget runs out.
 
 ### Recommended handoff evidence
 
