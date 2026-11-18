@@ -431,15 +431,25 @@ def _unit_body(unit: dict, integration: str, workspace: str = "") -> str:
         acceptance = [acceptance]
     bullets = "\n".join(f"- {str(a).strip()}" for a in acceptance if str(a).strip())
     command = str(unit["command"]).strip()
+    paths = [p.strip() for p in files.replace(";", ",").split(",") if p.strip()]
+    file_bullets = "\n".join(f"- {p}" for p in paths) or f"- {files}"
     instruction = f"{title}\nfiles: {files}\nacceptance:\n{bullets}\ncommand: {command}"
     lines = [
         "## Original instruction", instruction, "",
+        "## Files to create",
+        file_bullets, "",
+        "Each path above is relative to the workspace root. Create any missing parent",
+        "directory and keep the tree as written — a file named `tests/test_mathy.py`",
+        "belongs inside `tests/`, not next to it. The reviewer runs the command from the",
+        "workspace root and will fail the unit if a declared path is missing.",
+        "",
         "## Verification", f"command: {command}", f"module: {files}", "",
     ]
     if workspace:
         lines += ["## Workspace",
                   f"root: {workspace}",
                   "Write the files above at these exact paths, relative to the workspace root.",
+                  "Never write outside this root.",
                   ""]
     lines += ["## Branches", f"integration: {integration}", "round: 1", ""]
     return "\n".join(lines)
