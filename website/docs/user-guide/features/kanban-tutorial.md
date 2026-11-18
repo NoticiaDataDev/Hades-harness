@@ -10,7 +10,7 @@ hermes dashboard             # opens http://127.0.0.1:9119 in your browser
 # click Kanban in the left nav
 ```
 
-The dashboard is the most comfortable place for **you** to watch the system. Agent workers the dispatcher spawns never see the dashboard or the CLI — they drive the board through a dedicated `kanban_*` [toolset](./kanban#how-workers-interact-with-the-board) (`kanban_show`, `kanban_list`, `kanban_complete`, `kanban_request_review`, `kanban_request_changes`, `kanban_block`, `kanban_heartbeat`, `kanban_comment`, `kanban_attach`, `kanban_attach_url`, `kanban_attachments`, `kanban_create`, `kanban_link`, `kanban_unblock`). All three surfaces — dashboard, CLI, worker tools — route through the same per-board SQLite DB (`~/.hermes/kanban.db` for the default board, `~/.hermes/kanban/boards/<slug>/kanban.db` for any board you create later), so each board is consistent no matter which side of the fence a change came from.
+The dashboard is the most comfortable place for **you** to watch the system. Agent workers the dispatcher spawns never see the dashboard or the CLI — they drive the board through tools. Which tools depends on the role: a **dispatcher worker** gets the `kanban_worker` [verbs](./kanban#the-worker-surface-kanban_worker) — one per role, so a coder lane is `hand_off`, a reviewer lane is `review_result`, and an integrator lane is `gate_result`, `open_round`, `decompose_sprint`, `sprint_report` — while a **lead or orchestrator profile** that enables the `kanban` toolset gets the routing surface (`kanban_show`, `kanban_list`, `kanban_create`, `kanban_link`, `kanban_unblock`, `kanban_block`, `kanban_comment`, `kanban_attachments`, …). All three surfaces — dashboard, CLI, worker tools — route through the same per-board SQLite DB (`~/.hermes/kanban.db` for the default board, `~/.hermes/kanban/boards/<slug>/kanban.db` for any board you create later), so each board is consistent no matter which side of the fence a change came from.
 
 This tutorial uses the `default` board throughout. If you want multiple isolated queues (one per project / repo / domain), see [Boards (multi-project)](./kanban#boards-multi-project) in the overview — the same CLI / dashboard / worker flows apply per board, and workers physically cannot see tasks on other boards.
 
@@ -65,28 +65,24 @@ On the next dispatcher tick (60s by default, or immediately if you hit **Nudge d
 
 ```python
 # worker tool calls — NOT commands you run
-kanban_show()
-# → returns title, body, worker_context, parents, prior attempts, comments
+# There is no kanban_show in a worker lane: the card (title, body, prior
+# attempts, parent handoffs, comments) arrives in the worker's first message.
 
-# (worker reads worker_context, uses terminal/file tools to design the schema,
-#  write migrations, run its own checks, commit — the real work happens here)
+# (worker uses terminal/file tools to design the schema, write migrations,
+#  run its own checks, commit — the real work happens here)
 
-kanban_heartbeat(note="schema drafted, writing migrations now")
-
-kanban_complete(
+hand_off(
     summary="users(id, email, pw_hash), sessions(id, user_id, jti, expires_at); "
             "refresh tokens stored as sessions with type='refresh'",
-    metadata={
-        "changed_files": ["migrations/001_users.sql", "migrations/002_sessions.sql"],
-        "decisions": ["bcrypt for hashing", "JWT for session tokens",
-                      "7-day refresh, 15-min access"],
-    },
 )
 ```
 
-`kanban_show` defaults `task_id` to `$HERMES_KANBAN_TASK`, so the worker doesn't need to know its own id. `kanban_complete` writes the summary + metadata onto the current `task_runs` row, closes that run, and transitions the task to `done` — all in one atomic hop through `kanban_db`.
+`hand_off` closes this run, transitions the task to `done`, and records
+`metadata.stage = "implemented"` on the closing run — one atomic hop through `kanban_db`.
+A worker that is genuinely stuck calls `hand_off(blocked_reason="…")` instead, which
+blocks the card for a human.
 
-When `SCHEMA` hits `done`, the dependency engine promotes `API` to `ready` automatically. The API worker, when it picks up, will call `kanban_show()` and see `SCHEMA`'s summary and metadata attached to the parent handoff — so it knows the schema decisions without re-reading a long design doc.
+When `SCHEMA` hits `done`, the dependency engine promotes `API` to `ready` automatically. The API worker, when it picks up, receives `SCHEMA`'s handoff as a **parent result** in its first message — so it knows the schema decisions without re-reading a long design doc. (A lead that wants to *see* a card's full state, including that handoff, has `kanban_show` on the routing surface.)
 
 Click the completed schema task on the board and the drawer shows everything:
 
@@ -139,7 +135,7 @@ Now filter the board to `content-ops` (or just search for "Transcribe") and you 
 
 Two transcribes done, one running, two ready waiting for the next dispatcher tick. The In Progress column is grouped by profile (the "Lanes by profile" default) so you see each worker's active task without scanning a mixed list. The dispatcher will promote the next ready task to running as soon as the current one completes. With three daemons working on three assignee pools in parallel, the whole content queue drains without further human input.
 
-**Everything Story 1 said about structured handoff still applies here.** A translator worker completing a call emits `kanban_complete(summary="translated 4 pages, style matched existing marketing voice", metadata={"duration_seconds": 720, "tokens_used": 2100})` — useful for analytics and for any downstream task that depends on this one.
+**Everything Story 1 said about structured handoff still applies here.** A translator worker completing a call emits `hand_off(summary="translated 4 pages, style matched existing marketing voice")` — useful for analytics and for any downstream task that depends on this one.
 
 ## Story 3 — Role pipeline with retry
 
@@ -149,9 +145,11 @@ The dashboard view, filtered by `auth-project`:
 
 ![Pipeline view for a multi-role feature](/img/kanban-tutorial/08-pipeline-auth.png)
 
-The screenshot uses the **pre-created downstream card** model: the implementation card has a dedicated reviewer child. In that model the engineer must call `kanban_complete` when implementation is ready so the reviewer child can leave `todo`. Never block the implementation parent merely to ask for review.
+The screenshot uses the **pre-created downstream card** model: the implementation card has a dedicated reviewer child. In that model the engineer must call `hand_off` when implementation is ready so the reviewer child can leave `todo`, and the reviewer ends with `review_result(verdict="pass"|"fail", findings="…")` — a `fail` completes the review card too; the machine never sends a card backwards, so red opens a new round. Never block the implementation parent merely to ask for review.
 
 For workflows where the same card owns implementation and review, use the first-class review lifecycle instead. The full implement → review → changes → re-review choreography is:
+
+> These are `kanban` **routing-surface** tools — for a lead/orchestrator profile or a human-driven session. A dispatcher worker's lane has no `kanban_request_review` / `kanban_request_changes` by design: the machine never sends a card backwards, so red is a new round.
 
 ```python
 # --- Engineer: first implementation attempt ---
