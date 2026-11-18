@@ -1876,6 +1876,12 @@ DEFAULT_CONFIG = {
         # Auto-claim tasks in the review column and spawn the assigned profile with the bundled
         # sdlc-review skill. Disable where every review is done manually from the dashboard.
         "review_dispatch": True,
+        # Which `kanban_worker` verbs this profile's dispatcher-spawned workers may see. The tool
+        # surface is per role, not per task: a coder lane is `hand_off`, a reviewer lane is
+        # `review_result`, an integrator lane is the four gate/round/sprint verbs. [] = derive the
+        # lane from the profile name (coder / reviewer / integrator), which is what an unconfigured
+        # profile gets. HERMES_KANBAN_WORKER_TOOLS, when the dispatcher pins it, wins over this.
+        "worker_tools": [],
         # Seconds between dispatcher ticks. Lower = snappier pickup; higher = less SQL pressure.
         "dispatch_interval_seconds": 60,
         # Auto-block after this many consecutive non-success attempts (spawn_failed, timed_out,

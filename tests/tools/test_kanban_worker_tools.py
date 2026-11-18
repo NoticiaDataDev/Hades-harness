@@ -519,3 +519,51 @@ def test_kanban_list_reports_review_outcome(board, monkeypatch):
     monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
     rows = json.loads(kt._handle_list({"status": "done"}))["tasks"]
     assert [r["review_outcome"] for r in rows if r["id"] == tid] == ["fail"]
+
+
+# ---------------------------------------------------------------------------
+# Where the lane comes from: env pin > profile config > role name
+# ---------------------------------------------------------------------------
+
+def _lane(monkeypatch, *, env=None, cfg=None, role="test-worker"):
+    """Resolve the lane with the three sources stubbed, so precedence is visible."""
+    import tools.kanban_worker_tools as kw
+
+    monkeypatch.delenv("HERMES_KANBAN_WORKER_TOOLS", raising=False)
+    if env is not None:
+        monkeypatch.setenv("HERMES_KANBAN_WORKER_TOOLS", env)
+    monkeypatch.setenv("HERMES_PROFILE", role)
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config_readonly",
+        lambda: {"kanban": {"worker_tools": cfg}} if cfg is not None else {},
+    )
+    return kw.allowed_verbs()
+
+
+def test_lane_comes_from_the_profile_config(monkeypatch):
+    """A pinned config is the lane even when the profile name says nothing."""
+    assert _lane(monkeypatch, cfg=["review_result"]) == {"review_result"}
+
+
+def test_bare_string_config_is_one_verb_not_five_characters(monkeypatch):
+    """YAML makes ``worker_tools: hand_off`` easy to write; it means one verb."""
+    assert _lane(monkeypatch, cfg="hand_off") == {"hand_off"}
+
+
+def test_env_pin_beats_the_profile_config(monkeypatch):
+    """The dispatcher's per-process pin wins — that is why it exists."""
+    assert _lane(monkeypatch, env="sprint_report", cfg="hand_off") == {"sprint_report"}
+
+
+def test_role_name_is_the_last_resort(monkeypatch):
+    """No pin, no config: {role}_VERBS. coder/reviewer/integrator keep working unconfigured."""
+    assert _lane(monkeypatch, role="reviewer") == {"review_result"}
+    assert _lane(monkeypatch, role="coder") == {"hand_off"}
+    assert _lane(monkeypatch, role="integrator") == {
+        "gate_result", "open_round", "decompose_sprint", "sprint_report"}
+    assert _lane(monkeypatch, role="some-unmapped-profile") is None  # all six visible
+
+
+def test_a_config_value_that_is_not_a_list_is_ignored(monkeypatch):
+    """Corrupt config must not silently produce a lane of one-character verbs."""
+    assert _lane(monkeypatch, cfg={"hand_off": True}, role="coder") == {"hand_off"}

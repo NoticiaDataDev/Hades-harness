@@ -40,9 +40,10 @@ Two caveats worth writing down:
   hosted multiplexed inside a gateway process would see another card's lane — the fix
   there is to carry the lane through the session ContextVar the way the toolset resolver
   does, not to widen this gate.
-- ``kanban.worker_tools`` in the assignee profile is the intended source of the lane.
-  Nothing exports ``HERMES_KANBAN_WORKER_TOOLS`` yet, so the role-name fallback
-  (``coder`` / ``reviewer`` / ``integrator``) is what lanes use today.
+- ``kanban.worker_tools`` in the assignee profile is the intended source of the lane:
+  ``allowed_verbs`` reads the env pin first, then that config key, then the role name
+  (``coder`` / ``reviewer`` / ``integrator``). A profile that pins nothing still gets the
+  role lane, so no config is strictly required.
 """
 from __future__ import annotations
 
@@ -74,13 +75,37 @@ def _env_verbs() -> Optional[set[str]]:
     return {p for p in re.split(r"[\s,]+", raw.strip()) if p}
 
 
-def allowed_verbs() -> Optional[set[str]]:
-    """The verbs this worker may see: the env pin, else its profile's role lane, else all.
+def _config_verbs() -> Optional[set[str]]:
+    """``kanban.worker_tools`` from the assignee profile's config.yaml, or None.
 
-    Never consulted for a human/lead session — ``verb_visible`` gates on
+    Read through ``load_config_readonly``: the tool resolver asks for this once per
+    schema build, and the value is never mutated. ``worker_tools: hand_off`` (a bare
+    string) is accepted as one verb — YAML makes that easy to write by accident.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        raw = (load_config_readonly().get("kanban") or {}).get("worker_tools")
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = re.split(r"[\s,]+", raw.strip())
+    if not isinstance(raw, (list, tuple, set)):
+        return None
+    return {str(v).strip() for v in raw if str(v).strip()} or None
+
+
+def allowed_verbs() -> Optional[set[str]]:
+    """The verbs this worker may see: env pin, else profile config, else role lane, else all.
+
+    The dispatcher may pin the lane per spawned process (``HERMES_KANBAN_WORKER_TOOLS``);
+    otherwise the assignee profile's ``kanban.worker_tools`` decides, and with neither the
+    role name does. Never consulted for a human/lead session — ``verb_visible`` gates on
     ``HERMES_KANBAN_TASK`` first.
     """
-    pinned = _env_verbs()
+    pinned = _env_verbs() or _config_verbs()
     if pinned is not None:
         return pinned
     role = (os.environ.get("HERMES_PROFILE") or "").strip().lower()
