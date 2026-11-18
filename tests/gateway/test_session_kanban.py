@@ -38,7 +38,8 @@ def test_claim_freezes_task_policy_and_rejects_forgery(tmp_path, monkeypatch):
     context = json.loads(policy.kanban_json)
     assert policy.source == 'kanban' and policy.cwd == str(workspace)
     assert policy.model == task.model_override and policy.provider == task.provider_override
-    assert {'kanban', 'terminal', 'file'} <= set(policy.toolsets)
+    assert {'kanban_worker', 'terminal', 'file'} <= set(policy.toolsets)
+    assert 'kanban' not in policy.toolsets  # the 15-tool routing surface is opt-in
     assert context['task_id'] == task.id and context['run_id'] == task.current_run_id
     assert context['board'] == 'owned' and context['claim_lock'] == task.claim_lock
     assert context['skills'] == ['owned-skill'] and context['goal_mode'] and context['goal_max_turns'] == 3
@@ -146,3 +147,47 @@ def test_claim_reclaimed_before_admission_marker_is_refused(tmp_path, monkeypatc
     assert calls == []
     with closing(connect(board='owned')) as conn:
         assert conn.execute("SELECT count(*) FROM task_events WHERE task_id=? AND kind='owner_admitted'", (task_id,)).fetchone()[0] == 0
+
+
+def test_keep_routing_is_opt_in_and_the_default_is_the_role_verbs(tmp_path, monkeypatch):
+    """A worker lane gets kanban_worker; only kanban.keep_routing brings back the 15 tools."""
+    import json
+    from contextlib import closing
+    from types import SimpleNamespace
+
+    from hermes_cli import kanban_db as kb
+    from hermes_cli.kanban_db_connect import connect
+    from gateway.session_contract import SessionActor
+    from gateway.session_kanban import build_kanban_policy
+
+    monkeypatch.setenv('HERMES_KANBAN_HOME', str(tmp_path))
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.delenv('HERMES_KANBAN_DB', raising=False)
+    monkeypatch.setattr('hermes_cli.profiles.resolve_profile_env',
+                        lambda name: str(tmp_path) if name == 'default' else str(tmp_path / name))
+    workspace = tmp_path / 'ws'
+    workspace.mkdir()
+    kb.create_board('owned')
+    with closing(connect(board='owned')) as conn:
+        task_id = kb.create_task(conn, title='Lane', assignee='default',
+                                 workspace_kind='dir', workspace_path=str(workspace))
+        kb.recompute_ready(conn)
+        task = kb.claim_task(conn, task_id)
+    actor = SessionActor('owner', str(tmp_path), frozenset({'session:create'}), 'transport')
+    connection = SimpleNamespace(authority=SimpleNamespace(profile_id=str(tmp_path)),
+                                 actor=actor, native_owner=True)
+    params = dict(board='owned', task_id=task.id, run_id=task.current_run_id,
+                  claim_lock=task.claim_lock)
+    base = {'model': {'default': 'loop-model', 'provider': 'custom'},
+            'platform_toolsets': {'cli': ['terminal']}}
+
+    plain, _ = build_kanban_policy(connection, params, base)
+    assert 'kanban_worker' in plain.toolsets and 'kanban' not in plain.toolsets
+
+    routing, _ = build_kanban_policy(
+        connection, params, {**base, 'kanban': {'keep_routing': True}})
+    assert 'kanban' in routing.toolsets and 'kanban_worker' not in routing.toolsets
+
+    # The lane itself still travels in the bound context, before tool discovery.
+    assert json.loads(plain.kanban_json)['profile'] == 'default'

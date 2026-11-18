@@ -2144,9 +2144,16 @@ def _dispatch_lane_task(
         _kbw.set_branch_name(conn, claimed.id, resolved_branch_name or (claimed.branch_name or "").strip() or f"wt/{claimed.id}")
     _kbw._maybe_emit_scratch_tip(conn, claimed.id, claimed.workspace_kind)
     if lane == "review":
-        # Force-load sdlc-review; the kanban lifecycle is already in every
-        # worker's system prompt via KANBAN_GUIDANCE.
-        claimed.skills = list(dict.fromkeys([*(claimed.skills or []), "sdlc-review"]))
+        # Force-load sdlc-review unless the profile made it explicit that its reviewer lane
+        # carries the protocol itself (SOUL.md): kanban.review_skill: "" disables the skill,
+        # which otherwise re-floods the prompt the curated lane just trimmed.
+        try:
+            from hermes_cli.config import load_config
+            review_skill = ((load_config() or {}).get("kanban") or {}).get("review_skill", "sdlc-review")
+        except Exception:
+            review_skill = "sdlc-review"
+        if review_skill:
+            claimed.skills = list(dict.fromkeys([*(claimed.skills or []), review_skill]))
     try:
         pid = _call_spawn_fn(spawn_fn if spawn_fn is not None else _default_spawn, claimed, str(workspace), board)
         if pid:

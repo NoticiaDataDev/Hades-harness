@@ -44,8 +44,13 @@ def build_kanban_policy(connection, params, config):
             context = kb.build_worker_context(conn, task.id)
             skills = list(task.skills or ())
             if kb._retry_status_for_run(conn, task.id, task.current_run_id) == 'review':
-                # Same rule as the dispatcher's review lane: the reviewer always loads sdlc-review.
-                skills = list(dict.fromkeys([*skills, 'sdlc-review']))
+                # Same rule as the dispatcher's review lane: the reviewer always loads
+                # sdlc-review. Profiles whose reviewer gets its protocol from SOUL.md set
+                # kanban.review_skill to "" — otherwise the skill re-floods the prompt the
+                # lane just trimmed.
+                review_skill = (config.get('kanban') or {}).get('review_skill', 'sdlc-review')
+                if review_skill:
+                    skills = list(dict.fromkeys([*skills, review_skill]))
     except (ValueError, OSError, sqlite3.Error) as exc:
         raise RuntimeStoreError('invalid_kanban_claim') from exc
     cwd = task.workspace_path
@@ -66,7 +71,16 @@ def build_kanban_policy(connection, params, config):
     context['db'] = str(path)
     request = json.loads(policy.request_json)
     request.update(source='kanban', board=board, task_id=task.id, run_id=task.current_run_id)
-    return replace(policy, source='kanban', platform='cli', toolsets=tuple(sorted(set(policy.toolsets) | {'kanban'})),
+    # The board surface a kanban turn gets. A worker lane carries the role verbs
+    # (`kanban_worker`, narrowed per assignee profile by each verb's check_fn); the 15-tool
+    # routing surface is opt-in, because it costs ~27 KB of schema and teaches a lane tools
+    # it cannot use — a coder told to "call kanban_show first" that has no kanban_show.
+    # `kanban.keep_routing` is for a profile that really routes: the integrator, which opens
+    # rounds and reads children directly.
+    kanban_cfg = config.get('kanban') or {}
+    board_toolset = 'kanban' if kanban_cfg.get('keep_routing') else 'kanban_worker'
+    return replace(policy, source='kanban', platform='cli',
+                   toolsets=tuple(sorted(set(policy.toolsets) | {board_toolset})),
                    request_json=json.dumps(request, sort_keys=True), kanban_json=json.dumps(context)), private
 
 

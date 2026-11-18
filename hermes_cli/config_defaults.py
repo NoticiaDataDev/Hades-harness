@@ -1882,6 +1882,14 @@ DEFAULT_CONFIG = {
         # lane from the profile name (coder / reviewer / integrator), which is what an unconfigured
         # profile gets. HERMES_KANBAN_WORKER_TOOLS, when the dispatcher pins it, wins over this.
         "worker_tools": [],
+        # Give kanban turns the 15-tool routing surface instead of the role verbs. Only a
+        # profile that really routes wants this — an integrator that opens rounds, links cards
+        # and reads children. Everywhere else it costs ~27 KB of schema and teaches the lane
+        # tools it does not have.
+        "keep_routing": False,
+        # Skill force-loaded on a review run. "" disables it for profiles whose reviewer gets
+        # its protocol from SOUL.md instead.
+        "review_skill": "sdlc-review",
         # Seconds between dispatcher ticks. Lower = snappier pickup; higher = less SQL pressure.
         "dispatch_interval_seconds": 60,
         # Auto-block after this many consecutive non-success attempts (spawn_failed, timed_out,
