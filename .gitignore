@@ -339,3 +339,55 @@ infografico/
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
+
+# ---------------------------------------------------------------------------
+# Hades harness — runtime state and secrets. NEVER commit these.
+# This repo doubles as the local agent environment, so everything below is
+# machine state: credentials, profile homes, boards, sessions and caches.
+# ---------------------------------------------------------------------------
+/.env
+/.env.*
+!/.env.example
+/auth.json
+/auth.lock
+/state.db
+/state.db-*
+/gateway_state.json
+/gateway.lock
+/profile.yaml
+/profiles/
+/kanban/
+/sessions/
+/logs/
+/memories/
+/backups/
+/cache/
+/runtime/
+/pairing/
+/platforms/
+/worker-outboxes/
+/audio_cache/
+/image_cache/
+/plugin-update-checks/
+/models_dev_cache*
+/.install_id.lock
+/.venv/
+/workspace/
+/installs/
+/projects/
+
+# credentials in any shape
+.ssh/
+id_rsa*
+id_ed25519*
+*.pem
+*.key
+*.p12
+*.keystore
+.netrc
+.git-credentials
+*.kdbx
+
+# local databases / journals
+*.db-wal
+*.db-shm
