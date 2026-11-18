@@ -80,7 +80,13 @@ _pairing_tool_call_id = coalesce_tool_call_id  # canonical id used by the persis
 # Lane-completion verbs: a successful call has already closed the card, so the turn
 # must end instead of inviting another model response. Deliberately explicit — a
 # wrong entry here would silently truncate a legitimate multi-step lane.
-_LANE_TERMINAL_VERBS = frozenset({"hand_off"})
+_LANE_TERMINAL_VERBS = frozenset({
+    "hand_off",        # coder: card done
+    "review_result",   # reviewer: verdict recorded
+    "gate_result",     # integrator: gate closed
+    "decompose_sprint",# integrator: sprint parked on its close-out
+    "sprint_report",   # integrator: sprint closed or blocked
+})
 
 
 def _tc_name(tool_call: Any) -> str:

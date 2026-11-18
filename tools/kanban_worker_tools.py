@@ -423,7 +423,7 @@ def _handle_open_round(args: dict, **kw) -> str:
 
 # --------------------------------------------------------------------------- 5. decompose_sprint
 
-def _unit_body(unit: dict, integration: str) -> str:
+def _unit_body(unit: dict, integration: str, workspace: str = "") -> str:
     title = str(unit["title"]).strip()
     files = str(unit["files"]).strip()
     acceptance = unit["acceptance"]
@@ -432,11 +432,17 @@ def _unit_body(unit: dict, integration: str) -> str:
     bullets = "\n".join(f"- {str(a).strip()}" for a in acceptance if str(a).strip())
     command = str(unit["command"]).strip()
     instruction = f"{title}\nfiles: {files}\nacceptance:\n{bullets}\ncommand: {command}"
-    return "\n".join([
+    lines = [
         "## Original instruction", instruction, "",
         "## Verification", f"command: {command}", f"module: {files}", "",
-        "## Branches", f"integration: {integration}", "round: 1", "",
-    ])
+    ]
+    if workspace:
+        lines += ["## Workspace",
+                  f"root: {workspace}",
+                  "Write the files above at these exact paths, relative to the workspace root.",
+                  ""]
+    lines += ["## Branches", f"integration: {integration}", "round: 1", ""]
+    return "\n".join(lines)
 
 
 def _validate_units(units: Any) -> list[dict]:
@@ -473,28 +479,54 @@ def _handle_decompose_sprint(args: dict, **kw) -> str:
         integration_block = sections.get("integration", "")
         branch = "integration"
         suite = ""
+        declared_ws = ""
         for line in integration_block.splitlines():
             if ":" in line:
                 key, value = line.split(":", 1)
-                if key.strip().lower() == "branch" and value.strip():
+                k = key.strip().lower()
+                if k == "branch" and value.strip():
                     branch = value.strip()
-                if key.strip().lower() == "full suite" and value.strip():
+                if k == "full suite" and value.strip():
                     suite = value.strip()
+                if k == "workspace" and value.strip():
+                    declared_ws = value.strip()
+        # The workspace decides what "verified" means: the coder writes there, the reviewer
+        # runs the command there, the gate merges there. Scratch is the wrong default for a
+        # unit — every child would get a private, empty directory, and a green would prove
+        # nothing about the code the pipeline produced. So the integrator must name the
+        # workspace before any unit card exists: in '## Integration', or by creating the
+        # sprint card with a dir workspace.
+        workspace = declared_ws or (
+            task.workspace_path
+            if (task.workspace_kind == "dir" and task.workspace_path) else "")
+        _kt._check(bool(workspace),
+                   f"{tid} names no workspace: add 'workspace: /absolute/path' to its "
+                   f"'## Integration' section, or create the sprint card with a dir workspace. "
+                   f"Refusing to create unit cards — each would get a private scratch directory, "
+                   f"the reviewer would test a different tree than the coder wrote, and the gate "
+                   f"would merge nothing.")
+        _kt._check(os.path.isabs(workspace),
+                   f"workspace must be an absolute path, got {workspace!r}")
+        os.makedirs(workspace, exist_ok=True)
+        workspace = os.path.realpath(workspace)
         created_by = _kt._persisted_identity()
         board = args.get("board")
         made: list[dict] = []
         for index, unit in enumerate(units, 1):
-            body = _unit_body(unit, branch)
+            body = _unit_body(unit, branch, workspace)
             base = str(unit["title"]).strip()
             code = kb.create_task(
                 conn, title=f"{base} — code", body=body, assignee="coder",
-                created_by=created_by, board=board, creator_task_id=tid)
+                created_by=created_by, board=board, creator_task_id=tid,
+                workspace_kind="dir", workspace_path=workspace)
             review = kb.create_task(
                 conn, title=f"{base} — review", body=body, assignee="reviewer",
-                parents=(code,), created_by=created_by, board=board, creator_task_id=tid)
+                parents=(code,), created_by=created_by, board=board, creator_task_id=tid,
+                workspace_kind="dir", workspace_path=workspace)
             gate = kb.create_task(
                 conn, title=f"{base} — gate", body=body, assignee="integrator",
-                parents=(review,), created_by=created_by, board=board, creator_task_id=tid)
+                parents=(review,), created_by=created_by, board=board, creator_task_id=tid,
+                workspace_kind="dir", workspace_path=workspace)
             made.append({"title": base, "code": code, "review": review, "gate": gate})
         closure_body = "\n".join([
             "## Sprint",
@@ -503,6 +535,7 @@ def _handle_decompose_sprint(args: dict, **kw) -> str:
             "## Sprint close-out",
             f"branch: {branch}",
             f"full suite: {suite or '<the project suite>'}",
+            f"workspace: {workspace}",
             "",
             "Every unit's gate is complete. Verify the *combination*: run the full suite and",
             "start the project. Report a GAP only if the project is broken after every unit",
@@ -512,10 +545,12 @@ def _handle_decompose_sprint(args: dict, **kw) -> str:
         ])
         closure = kb.create_task(
             conn, title=f"{_base_title(task.title)} — close-out", body=closure_body,
-            assignee="integrator", parents=(), created_by=created_by, board=board,
-            creator_task_id=tid)
-        for unit in made:  # the closure card is the sprint's heartbeat
-            kb.link_tasks(conn, parent_id=closure, child_id=unit["gate"])
+            assignee="integrator", parents=tuple(u["gate"] for u in made),
+            created_by=created_by, board=board, creator_task_id=tid,
+            workspace_kind="dir", workspace_path=workspace)
+        # The close-out is a child of every gate, never their parent: linking it the other
+        # way round made the closure ready the moment it was created, so it reported on a
+        # sprint whose units had not started yet.
         kb.link_tasks(conn, parent_id=closure, child_id=tid, expected_child_run_id=run_id)
         parked = kb.block_task(
             conn, tid, kind="dependency", expected_run_id=run_id,
