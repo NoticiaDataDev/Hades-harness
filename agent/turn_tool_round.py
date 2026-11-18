@@ -168,6 +168,7 @@ def run_tool_round(
     from agent.prepared_compaction import maybe_prepare
     maybe_prepare(agent, messages, origin="tool-batch")
 
+    agent._lane_terminal_verb = None
     agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
     from hermes_cli.observability.shared_metrics_harness import finish_tool_round
 
@@ -179,6 +180,17 @@ def run_tool_round(
         _turn_exit_reason = "session_persistence_failed"
         final_response = ""
         failed = True
+        return _verdict("break")
+
+    if getattr(agent, "_lane_terminal_verb", None):
+        # The card is already closed. Break here and never send this result back:
+        # a non-reasoning model reads a success plus an invitation to act as
+        # "continue", re-calls the verb, gets "stale run", concludes it failed and
+        # rewrites its own files. The persisted row stays for audit only.
+        _turn_exit_reason = "worker_verb_completed"
+        # Local-only closing text: satisfies the "no reply" guard without a model
+        # request. It is never sent back into the conversation.
+        final_response = f"Run ended: {agent._lane_terminal_verb} completed. The card is closed."
         return _verdict("break")
 
     if agent._tool_guardrail_halt_decision is not None:

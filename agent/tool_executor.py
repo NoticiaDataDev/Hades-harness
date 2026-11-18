@@ -77,6 +77,12 @@ logger = logging.getLogger(__name__)
 _pairing_tool_call_id = coalesce_tool_call_id  # canonical id used by the persisted assistant message
 
 
+# Lane-completion verbs: a successful call has already closed the card, so the turn
+# must end instead of inviting another model response. Deliberately explicit — a
+# wrong entry here would silently truncate a legitimate multi-step lane.
+_LANE_TERMINAL_VERBS = frozenset({"hand_off"})
+
+
 def _tc_name(tool_call: Any) -> str:
     return getattr(getattr(tool_call, "function", None), "name", "") or "tool"
 
@@ -1842,6 +1848,12 @@ def _publish_sequential_result(agent, messages: list, ref: _ToolCallRef, managed
     if committed is None:
         return False
     function_result, display_function_result, risk_metadata = committed
+
+    # Lane-completion verbs: a successful call has already closed the card. Flag the
+    # turn so the round ends here instead of asking the model for another response.
+    # Only verbs that truly terminate a worker run belong in this set.
+    if not _is_error_result and not managed.blocked and ref.name in _LANE_TERMINAL_VERBS:
+        agent._lane_terminal_verb = ref.name
 
     # Terminal approval batching (#113158): once this slot's failure is
     # published, the informed consent collected for later slots describes a
